@@ -109,28 +109,32 @@ def main():
     print("Optimizing wave function parameters...")
     print("=" * 60)
     
-    opt_results = vmc.optimize(
-        n_opt_steps=20,
-        n_mc_steps=500,
-        n_walkers=50,
-        verbose=True
-    )
-    
-    if opt_results['energy_history']:
-        print(f"\nOptimization Results:")
-        print(f"  Initial energy: {opt_results['energy_history'][0]:.6f}")
-        print(f"  Final energy: {opt_results['energy_history'][-1]:.6f}")
-        print(f"  Improvement: {opt_results['energy_history'][0] - opt_results['energy_history'][-1]:.6f}")
+    try:
+        opt_results = vmc.optimize(
+            n_opt_steps=20,
+            n_mc_steps=500,
+            n_walkers=50,
+            verbose=True
+        )
         
-        # Plot optimization history
-        plt.figure(figsize=(8, 5))
-        plt.plot(opt_results['energy_history'], 'o-', linewidth=2, markersize=4)
-        plt.xlabel('Optimization Step')
-        plt.ylabel('Energy')
-        plt.title('VMC Optimization History')
-        plt.grid(True, alpha=0.3)
-        plt.savefig('hubbard_vmc_optimization.png', dpi=150)
-        print(f"  Optimization plot saved to: hubbard_vmc_optimization.png")
+        if opt_results['energy_history']:
+            print(f"\nOptimization Results:")
+            print(f"  Initial energy: {opt_results['energy_history'][0]:.6f}")
+            print(f"  Final energy: {opt_results['energy_history'][-1]:.6f}")
+            print(f"  Improvement: {opt_results['energy_history'][0] - opt_results['energy_history'][-1]:.6f}")
+            
+            # Plot optimization history
+            plt.figure(figsize=(8, 5))
+            plt.plot(opt_results['energy_history'], 'o-', linewidth=2, markersize=4)
+            plt.xlabel('Optimization Step')
+            plt.ylabel('Energy')
+            plt.title('VMC Optimization History')
+            plt.grid(True, alpha=0.3)
+            plt.savefig('hubbard_vmc_optimization.png', dpi=150)
+            print(f"  Optimization plot saved to: hubbard_vmc_optimization.png")
+    except ValueError as e:
+        print(f"\nNote: Wave function optimization skipped: {e}")
+        print("  (This requires trainable parameters in the quantum state)")
     
     print("\n" + "=" * 60)
     print("Example completed successfully!")

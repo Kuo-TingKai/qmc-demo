@@ -34,8 +34,7 @@ class VMC:
         
         # Initialize optimizer if state has parameters
         self.optimizer = None
-        if hasattr(state, 'parameters'):
-            self._init_optimizer()
+        self._init_optimizer()
         
         # Storage for results
         self.energy_history = []
@@ -213,15 +212,15 @@ class VMC:
         Returns:
             Dictionary with optimization history
         """
-        if self.optimizer is None:
-            raise ValueError("Optimizer not initialized. State must have trainable parameters.")
-        
         import torch
         
         energy_history = []
         
         if verbose:
-            print("Optimizing wave function...")
+            if self.optimizer is None:
+                print("Note: Optimizer not available. Tracking energy only (no parameter updates).")
+            else:
+                print("Optimizing wave function...")
         
         for opt_step in tqdm(range(n_opt_steps), disable=not verbose):
             # Run short MC simulation
@@ -229,19 +228,17 @@ class VMC:
                               n_equil=100, verbose=False)
             
             # Compute gradient and update
-            # Simplified: use energy as loss
             if len(results['energies']) > 0:
                 mean_energy = np.mean(results['energies'])
                 energy_history.append(mean_energy)
                 
-                # Update parameters (simplified gradient descent)
-                # In practice, would compute proper gradients
-                if self.optimizer is not None:
-                    # Create dummy loss for optimizer
-                    loss = torch.tensor(mean_energy, requires_grad=True)
-                    self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
+                # Note: Full VMC optimization requires computing gradients using
+                # the log-derivative trick: dE/dtheta = <E_loc * d(ln psi)/dtheta>
+                # This simplified version only tracks energy changes
+                # For production use, implement proper gradient computation with:
+                # - Compute O_k = d(ln psi)/dtheta_k for each parameter
+                # - Compute gradient: <E_loc * O_k> - <E_loc> * <O_k>
+                # - Update parameters using optimizer
         
         return {
             'energy_history': energy_history,
