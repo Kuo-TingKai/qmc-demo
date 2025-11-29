@@ -1,0 +1,433 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{physics}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{量子蒙地卡羅數值模擬：演算法理論與實現}
+\author{Ting-Kai Kuo}
+\date{\today}
+
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{proposition}[theorem]{命題}
+\newtheorem{corollary}[theorem]{推論}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{引言}
+
+本文件詳細說明量子蒙地卡羅（Quantum Monte Carlo, QMC）方法的數學理論基礎、演算法實現步驟，以及理論有效性證明。本專案實現了多種最新的 QMC 技術，包括神經網路量子態（Neural Network Quantum States, NQS）、變分蒙地卡羅（Variational Monte Carlo, VMC）、輔助場量子蒙地卡羅（Auxiliary-Field QMC, AFQMC）以及路徑積分蒙地卡羅（Path Integral Monte Carlo, PIMC）。
+
+\section{神經網路量子態（Neural Network Quantum States）}
+
+\subsection{受限玻爾茲曼機量子態（RBM Quantum State）}
+
+受限玻爾茲曼機量子態是基於 Carleo \& Troyer (2017) 的開創性工作，使用受限玻爾茲曼機（Restricted Boltzmann Machine, RBM）來表示量子多體系統的波函數。
+
+\subsubsection{數學表示}
+
+對於自旋-1/2 系統，RBM 量子態的波函數表示為：
+
+\begin{equation}
+\psi_{\text{RBM}}(\sigma) = \exp\left(\sum_{i=1}^{N} a_i \sigma_i\right) \prod_{j=1}^{M} \cosh\left(\sum_{i=1}^{N} W_{ij} \sigma_i + b_j\right)
+\end{equation}
+
+其中：
+\begin{itemize}
+    \item $\sigma = \{\sigma_1, \sigma_2, \ldots, \sigma_N\}$ 是自旋配置，$\sigma_i \in \{-1, +1\}$
+    \item $N$ 是可見單元數量（晶格位點數）
+    \item $M$ 是隱藏單元數量
+    \item $a_i$ 是可見層偏置參數
+    \item $b_j$ 是隱藏層偏置參數
+    \item $W_{ij}$ 是連接可見單元 $i$ 和隱藏單元 $j$ 的權重矩陣
+\end{itemize}
+
+\subsubsection{理論有效性}
+
+\begin{theorem}[RBM 的通用近似性]
+對於任意量子多體波函數 $\psi(\sigma)$，存在一個 RBM 量子態 $\psi_{\text{RBM}}(\sigma)$，使得對於任意 $\epsilon > 0$，有：
+\begin{equation}
+\sum_{\sigma} |\psi(\sigma) - \psi_{\text{RBM}}(\sigma)|^2 < \epsilon
+\end{equation}
+當隱藏單元數量 $M$ 足夠大時。
+\end{theorem}
+
+\textbf{證明思路：} RBM 可以表示任意布爾函數的組合，而量子波函數可以視為複值函數在離散配置空間上的映射。通過增加隱藏單元數量，RBM 可以任意逼近目標波函數。
+
+\subsubsection{對數振幅計算}
+
+在實際計算中，我們使用對數振幅以避免數值溢出：
+
+\begin{equation}
+\ln \psi_{\text{RBM}}(\sigma) = \sum_{i=1}^{N} a_i \sigma_i + \sum_{j=1}^{M} \ln \cosh\left(\sum_{i=1}^{N} W_{ij} \sigma_i + b_j\right)
+\end{equation}
+
+這個表達式的計算複雜度為 $O(NM)$，對於中等大小的系統非常高效。
+
+\subsection{多層感知器量子態（MLP Quantum State）}
+
+多層感知器量子態使用前饋神經網路來表示波函數：
+
+\begin{equation}
+\psi_{\text{MLP}}(\sigma) = \mathcal{N}(\sigma; \theta)
+\end{equation}
+
+其中 $\mathcal{N}$ 是一個多層神經網路，$\theta$ 是網路參數。網路輸出複數值，分別表示波函數的實部和虛部：
+
+\begin{equation}
+\psi_{\text{MLP}}(\sigma) = \text{Re}[\mathcal{N}(\sigma)] + i \cdot \text{Im}[\mathcal{N}(\sigma)]
+\end{equation}
+
+\subsection{卷積神經網路量子態（CNN Quantum State）}
+
+對於具有空間結構的晶格系統，卷積神經網路可以更好地捕捉空間相關性：
+
+\begin{equation}
+\psi_{\text{CNN}}(\sigma) = \mathcal{F}_{\text{FC}} \circ \mathcal{F}_{\text{Conv}}(\sigma)
+\end{equation}
+
+其中 $\mathcal{F}_{\text{Conv}}$ 是卷積層，用於提取局部特徵，$\mathcal{F}_{\text{FC}}$ 是全連接層，用於組合全局信息。
+
+\section{變分蒙地卡羅（Variational Monte Carlo, VMC）}
+
+\subsection{基本原理}
+
+變分蒙地卡羅方法通過最小化能量期望值來優化變分波函數：
+
+\begin{equation}
+E[\psi] = \frac{\langle \psi | \hat{H} | \psi \rangle}{\langle \psi | \psi \rangle} = \frac{\sum_{\sigma} |\psi(\sigma)|^2 E_{\text{loc}}(\sigma)}{\sum_{\sigma} |\psi(\sigma)|^2}
+\end{equation}
+
+其中局部能量（local energy）定義為：
+
+\begin{equation}
+E_{\text{loc}}(\sigma) = \sum_{\sigma'} \frac{\langle \sigma | \hat{H} | \sigma' \rangle \psi(\sigma')}{\psi(\sigma)}
+\end{equation}
+
+\subsection{重要性採樣}
+
+使用重要性採樣，能量期望值可以寫為：
+
+\begin{equation}
+E[\psi] = \frac{\sum_{\sigma} |\psi(\sigma)|^2 E_{\text{loc}}(\sigma)}{\sum_{\sigma} |\psi(\sigma)|^2} = \frac{\int P(\sigma) E_{\text{loc}}(\sigma) d\sigma}{\int P(\sigma) d\sigma}
+\end{equation}
+
+其中 $P(\sigma) = |\psi(\sigma)|^2$ 是配置的概率分布。
+
+通過 Metropolis-Hastings 演算法從 $P(\sigma)$ 中採樣配置 $\{\sigma_1, \sigma_2, \ldots, \sigma_M\}$，能量估計為：
+
+\begin{equation}
+E[\psi] \approx \frac{1}{M} \sum_{i=1}^{M} E_{\text{loc}}(\sigma_i)
+\end{equation}
+
+\subsection{Metropolis 採樣演算法}
+
+對於當前配置 $\sigma$，生成新配置 $\sigma'$ 的接受概率為：
+
+\begin{equation}
+A(\sigma \to \sigma') = \min\left(1, \frac{|\psi(\sigma')|^2}{|\psi(\sigma)|^2}\right) = \min\left(1, \exp(2[\ln|\psi(\sigma')| - \ln|\psi(\sigma)|])\right)
+\end{equation}
+
+\subsection{梯度計算與參數優化}
+
+能量對參數 $\theta_k$ 的梯度使用對數導數技巧（log-derivative trick）計算：
+
+\begin{equation}
+\frac{\partial E}{\partial \theta_k} = 2 \text{Re}\left[\langle E_{\text{loc}} O_k^* \rangle - \langle E_{\text{loc}} \rangle \langle O_k^* \rangle\right]
+\end{equation}
+
+其中 $O_k$ 是對數導數算符：
+
+\begin{equation}
+O_k(\sigma) = \frac{\partial \ln \psi(\sigma)}{\partial \theta_k} = \frac{1}{\psi(\sigma)} \frac{\partial \psi(\sigma)}{\partial \theta_k}
+\end{equation}
+
+對於 RBM 量子態，對數導數可以解析計算：
+
+\begin{align}
+\frac{\partial \ln \psi_{\text{RBM}}}{\partial a_i} &= \sigma_i \\
+\frac{\partial \ln \psi_{\text{RBM}}}{\partial b_j} &= \tanh\left(\sum_{i} W_{ij} \sigma_i + b_j\right) \\
+\frac{\partial \ln \psi_{\text{RBM}}}{\partial W_{ij}} &= \sigma_i \tanh\left(\sum_{k} W_{kj} \sigma_k + b_j\right)
+\end{align}
+
+\subsection{理論有效性}
+
+\begin{theorem}[變分原理]
+對於任意試探波函數 $\psi$，能量期望值 $E[\psi]$ 總是滿足：
+\begin{equation}
+E[\psi] \geq E_0
+\end{equation}
+其中 $E_0$ 是基態能量。當且僅當 $\psi$ 是基態波函數時，等號成立。
+\end{theorem}
+
+\textbf{證明：} 根據變分原理，對於任意歸一化的波函數 $\psi$：
+\begin{equation}
+E[\psi] = \langle \psi | \hat{H} | \psi \rangle = \sum_n |c_n|^2 E_n \geq E_0 \sum_n |c_n|^2 = E_0
+\end{equation}
+其中 $c_n = \langle n | \psi \rangle$，$|n\rangle$ 是哈密頓量的本徵態，$E_n$ 是對應的本徵值。
+
+\section{輔助場量子蒙地卡羅（Auxiliary-Field QMC, AFQMC）}
+
+\subsection{Hubbard-Stratonovich 變換}
+
+對於包含兩體相互作用的費米子系統，Hubbard-Stratonovich 變換將相互作用項分解為單粒子項：
+
+\begin{equation}
+e^{-\Delta \tau U \hat{n}_i \hat{n}_j} = \frac{1}{2} \sum_{s=\pm 1} e^{-\Delta \tau \lambda s (\hat{n}_i - \hat{n}_j) - \frac{\Delta \tau U}{2}}
+\end{equation}
+
+其中 $\lambda$ 由下式確定：
+
+\begin{equation}
+\cosh(\lambda \Delta \tau) = e^{U \Delta \tau / 2}
+\end{equation}
+
+對於排斥相互作用 $U > 0$：
+\begin{equation}
+\lambda = \frac{1}{\Delta \tau} \text{arccosh}(e^{U \Delta \tau / 2})
+\end{equation}
+
+\subsection{路徑積分表示}
+
+在虛時間演化中，傳播子可以寫為：
+
+\begin{equation}
+e^{-\beta \hat{H}} = \int \mathcal{D}[\phi] e^{-S[\phi]} \hat{U}[\phi]
+\end{equation}
+
+其中 $\phi$ 是輔助場，$S[\phi]$ 是作用量，$\hat{U}[\phi]$ 是單粒子演化算符。
+
+\subsection{符號問題}
+
+對於費米子系統，符號問題（sign problem）是 AFQMC 的主要挑戰。權重可能變為負值：
+
+\begin{equation}
+w[\phi] = \det \hat{U}[\phi]
+\end{equation}
+
+當 $\det \hat{U}[\phi] < 0$ 時，會導致統計誤差指數增長。
+
+\subsection{固定節點近似}
+
+固定節點近似通過限制輔助場的符號來緩解符號問題：
+
+\begin{equation}
+w[\phi] \to w[\phi] \Theta(\det \hat{U}[\phi])
+\end{equation}
+
+其中 $\Theta$ 是階躍函數，確保權重為正。
+
+\section{路徑積分蒙地卡羅（Path Integral Monte Carlo, PIMC）}
+
+\subsection{虛時間路徑積分}
+
+有限溫度下的配分函數可以寫為路徑積分形式：
+
+\begin{equation}
+Z = \text{Tr} e^{-\beta \hat{H}} = \int \mathcal{D}[\sigma(\tau)] e^{-S[\sigma(\tau)]}
+\end{equation}
+
+其中 $\beta = 1/k_B T$ 是逆溫度，$S[\sigma(\tau)]$ 是作用量：
+
+\begin{equation}
+S[\sigma(\tau)] = \int_0^{\beta} d\tau \left[\frac{1}{2} \left(\frac{d\sigma}{d\tau}\right)^2 + V(\sigma(\tau))\right]
+\end{equation}
+
+\subsection{離散時間切片}
+
+將虛時間離散化為 $M$ 個時間切片，$\Delta \tau = \beta / M$：
+
+\begin{equation}
+Z \approx \int \prod_{k=0}^{M-1} d\sigma_k \exp\left\{-\Delta \tau \sum_{k=0}^{M-1} \left[\frac{(\sigma_{k+1} - \sigma_k)^2}{2\Delta \tau^2} + V(\sigma_k)\right]\right\}
+\end{equation}
+
+其中 $\sigma_0 = \sigma_M$（週期邊界條件）。
+
+\subsection{Worm 演算法}
+
+Worm 演算法是 PIMC 中高效的更新方法，通過在路徑中插入和移除「蟲」（worm）來採樣配置：
+
+\begin{enumerate}
+    \item 在隨機時間切片 $\tau$ 和位點 $i$ 插入蟲
+    \item 蟲在虛時間中隨機遊走
+    \item 當蟲回到起點時，接受或拒絕更新
+\end{enumerate}
+
+接受概率為：
+
+\begin{equation}
+P_{\text{accept}} = \min\left(1, \frac{e^{-S_{\text{new}}}}{e^{-S_{\text{old}}}}\right)
+\end{equation}
+
+\subsection{超流密度計算}
+
+超流密度可以通過繞數（winding number）計算：
+
+\begin{equation}
+\rho_s = \frac{m k_B T}{\hbar^2} \frac{\langle W^2 \rangle}{L}
+\end{equation}
+
+其中繞數 $W$ 定義為：
+
+\begin{equation}
+W = \frac{1}{L} \sum_{i=1}^{N} \sum_{k=0}^{M-1} (\sigma_{i,k+1} - \sigma_{i,k})
+\end{equation}
+
+\section{Hubbard 模型}
+
+\subsection{哈密頓量}
+
+單帶 Hubbard 模型的哈密頓量為：
+
+\begin{equation}
+\hat{H} = -t \sum_{\langle ij \rangle, \sigma} (\hat{c}_{i\sigma}^\dagger \hat{c}_{j\sigma} + \text{h.c.}) + U \sum_i \hat{n}_{i\uparrow} \hat{n}_{i\downarrow} - \mu \sum_{i,\sigma} \hat{n}_{i\sigma}
+\end{equation}
+
+其中：
+\begin{itemize}
+    \item $t$ 是最近鄰躍遷振幅
+    \item $U$ 是位點相互作用強度
+    \item $\mu$ 是化學勢
+    \item $\hat{c}_{i\sigma}^\dagger$ 和 $\hat{c}_{i\sigma}$ 是費米子產生和湮滅算符
+    \item $\hat{n}_{i\sigma} = \hat{c}_{i\sigma}^\dagger \hat{c}_{i\sigma}$ 是粒子數算符
+\end{itemize}
+
+\subsection{局部能量計算}
+
+對於配置 $\sigma$，局部能量為：
+
+\begin{equation}
+E_{\text{loc}}(\sigma) = \sum_{\sigma'} \frac{\langle \sigma | \hat{H} | \sigma' \rangle \psi(\sigma')}{\psi(\sigma)}
+\end{equation}
+
+Hubbard 模型的非對角項來自躍遷項：
+
+\begin{equation}
+\langle \sigma | -t \hat{c}_{i\sigma}^\dagger \hat{c}_{j\sigma} | \sigma' \rangle = -t \delta_{\sigma, \sigma'_{ij}}
+\end{equation}
+
+其中 $\sigma'_{ij}$ 是將 $\sigma$ 中位點 $j$ 的粒子移到位點 $i$ 後的配置。
+
+\section{Bose-Hubbard 模型}
+
+\subsection{哈密頓量}
+
+Bose-Hubbard 模型的哈密頓量為：
+
+\begin{equation}
+\hat{H} = -t \sum_{\langle ij \rangle} (\hat{b}_i^\dagger \hat{b}_j + \text{h.c.}) + \frac{U}{2} \sum_i \hat{n}_i (\hat{n}_i - 1) - \mu \sum_i \hat{n}_i
+\end{equation}
+
+其中 $\hat{b}_i^\dagger$ 和 $\hat{b}_i$ 是玻色子產生和湮滅算符。
+
+\subsection{超流-絕緣體相變}
+
+當 $U/t \ll 1$ 時，系統處於超流相；當 $U/t \gg 1$ 時，系統處於 Mott 絕緣體相。臨界點可以通過計算超流密度和壓縮率來確定。
+
+\subsection{序參數}
+
+超流序參數定義為：
+
+\begin{equation}
+\psi_{\text{SF}} = \langle \hat{b}_i \rangle
+\end{equation}
+
+Mott 絕緣體的特徵是整數填充和零壓縮率：
+
+\begin{equation}
+\kappa = \frac{\partial \langle \hat{n} \rangle}{\partial \mu} = 0
+\end{equation}
+
+\section{數值實現細節}
+
+\subsection{採樣效率}
+
+為了提高採樣效率，我們使用：
+\begin{itemize}
+    \item 平衡步驟（equilibration steps）以達到穩態分布
+    \item 跳過步驟（skip steps）以減少自相關
+    \item 多行走者（multiple walkers）以並行採樣
+\end{itemize}
+
+\subsection{誤差估計}
+
+使用 Bootstrap 方法估計統計誤差：
+
+\begin{equation}
+\sigma_E = \sqrt{\frac{1}{B-1} \sum_{b=1}^{B} (E_b - \bar{E})^2}
+\end{equation}
+
+其中 $B$ 是 Bootstrap 樣本數，$E_b$ 是第 $b$ 個樣本的平均能量。
+
+\subsection{自相關時間}
+
+自相關時間 $\tau$ 定義為：
+
+\begin{equation}
+C(t) = \frac{\langle E(0) E(t) \rangle - \langle E \rangle^2}{\langle E^2 \rangle - \langle E \rangle^2} = e^{-t/\tau}
+\end{equation}
+
+有效樣本數為：
+
+\begin{equation}
+N_{\text{eff}} = \frac{N}{2\tau}
+\end{equation}
+
+\section{理論有效性總結}
+
+\subsection{收斂性}
+
+\begin{theorem}[VMC 收斂性]
+在適當的條件下，VMC 方法收斂到變分能量：
+\begin{equation}
+\lim_{M \to \infty} \frac{1}{M} \sum_{i=1}^{M} E_{\text{loc}}(\sigma_i) = E[\psi]
+\end{equation}
+其中 $M$ 是採樣數。
+\end{theorem}
+
+\textbf{證明：} 根據大數定律，當樣本數趨於無窮時，樣本平均收斂到期望值。
+
+\subsection{誤差界限}
+
+對於 $M$ 個獨立樣本，中心極限定理給出誤差界限：
+
+\begin{equation}
+P\left(\left|\frac{1}{M} \sum_{i=1}^{M} E_{\text{loc}}(\sigma_i) - E[\psi]\right| > \epsilon\right) \leq \frac{\text{Var}(E_{\text{loc}})}{M \epsilon^2}
+\end{equation}
+
+\subsection{計算複雜度}
+
+\begin{itemize}
+    \item RBM 量子態：$O(NM)$ 用於計算波函數振幅
+    \item VMC：$O(N^2 M)$ 用於局部能量計算（對於最近鄰相互作用）
+    \item PIMC：$O(NM)$ 用於每個更新步驟，其中 $M$ 是時間切片數
+\end{itemize}
+
+\section{結論}
+
+本文件詳細說明了量子蒙地卡羅方法的數學理論基礎和實現細節。這些方法在強關聯量子多體系統的研究中發揮著重要作用，特別是在處理大系統和複雜相變時。結合神經網路量子態的最新進展，這些方法為研究量子多體物理提供了強大的數值工具。
+
+\section{參考文獻}
+
+\begin{enumerate}
+    \item Carleo, G., \& Troyer, M. (2017). Solving the quantum many-body problem with artificial neural networks. \textit{Science}, 355(6325), 602-606.
+    \item Foulkes, W. M. C., et al. (2001). Quantum Monte Carlo simulations of solids. \textit{Reviews of Modern Physics}, 73(1), 33.
+    \item Ceperley, D. M. (1995). Path integrals in the theory of condensed helium. \textit{Reviews of Modern Physics}, 67(2), 279.
+    \item White, S. R. (1992). Density matrix formulation for quantum renormalization groups. \textit{Physical Review Letters}, 69(19), 2863.
+    \item Prokof'ev, N., \& Svistunov, B. (1998). Worm algorithm in quantum Monte Carlo simulations. \textit{Physical Review Letters}, 81(12), 2514.
+\end{enumerate}
+
+\end{document}
+
